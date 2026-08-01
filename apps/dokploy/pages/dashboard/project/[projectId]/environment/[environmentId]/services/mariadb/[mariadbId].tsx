@@ -64,7 +64,6 @@ const Mariadb = (
 	const { data: auth } = api.user.get.useQuery();
 	const { data: permissions } = api.user.getPermissions.useQuery();
 
-	const { data: isCloud } = api.settings.isCloud.useQuery();
 	const { data: serverIp } = api.settings.getIp.useQuery();
 
 	const { data: environments } = api.environment.byProjectId.useQuery({
@@ -203,11 +202,7 @@ const Mariadb = (
 										<TabsList
 											className={cn(
 												"md:grid md:w-fit max-md:overflow-y-scroll justify-start",
-												isCloud && data?.serverId
-													? "md:grid-cols-6"
-													: data?.serverId
-														? "md:grid-cols-5"
-														: "md:grid-cols-6",
+												"md:grid-cols-6",
 											)}
 										>
 											<TabsTrigger value="general">General</TabsTrigger>
@@ -219,8 +214,7 @@ const Mariadb = (
 											{permissions?.logs.read && (
 												<TabsTrigger value="logs">Logs</TabsTrigger>
 											)}
-											{permissions?.monitoring.read &&
-												((data?.serverId && isCloud) || !data?.server) && (
+											{permissions?.monitoring.read && (
 													<TabsTrigger value="monitoring">
 														Monitoring
 													</TabsTrigger>
@@ -250,7 +244,7 @@ const Mariadb = (
 										<TabsContent value="monitoring">
 											<div className="pt-2.5">
 												<div className="flex flex-col gap-4 border rounded-lg p-6">
-													{data?.serverId && isCloud ? (
+													{data?.serverId ? (
 														<ContainerPaidMonitoring
 															appName={data?.appName || ""}
 															baseUrl={`${data?.serverId ? `http://${data?.server?.ipAddress}:${data?.server?.metricsConfig?.server?.port}` : "http://localhost:4500"}`}
@@ -371,7 +365,6 @@ export async function getServerSideProps(
 			await helpers.mariadb.one.fetch({
 				mariadbId: params?.mariadbId,
 			});
-			await helpers.settings.isCloud.prefetch();
 			return {
 				props: {
 					trpcState: helpers.dehydrate(),

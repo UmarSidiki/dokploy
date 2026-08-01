@@ -86,7 +86,6 @@ const Service = (
 
 	const { data: auth } = api.user.get.useQuery();
 	const { data: permissions } = api.user.getPermissions.useQuery();
-	const { data: isCloud } = api.settings.isCloud.useQuery();
 	const { data: serverIp } = api.settings.getIp.useQuery();
 	const { data: environments } = api.environment.byProjectId.useQuery({
 		projectId: data?.environment?.projectId || "",
@@ -260,8 +259,7 @@ const Service = (
 											{data?.sourceType !== "raw" && (
 												<TabsTrigger value="patches">Patches</TabsTrigger>
 											)}
-											{permissions?.monitoring.read &&
-												((data?.serverId && isCloud) || !data?.server) && (
+											{permissions?.monitoring.read && (
 													<TabsTrigger value="monitoring">
 														Monitoring
 													</TabsTrigger>
@@ -327,7 +325,7 @@ const Service = (
 										<TabsContent value="monitoring">
 											<div className="pt-2.5">
 												<div className="flex flex-col border rounded-lg ">
-													{data?.serverId && isCloud ? (
+													{data?.serverId ? (
 														<ComposePaidMonitoring
 															serverId={data?.serverId || ""}
 															baseUrl={`${data?.serverId ? `http://${data?.server?.ipAddress}:${data?.server?.metricsConfig?.server?.port}` : "http://localhost:4500"}`}
@@ -490,7 +488,6 @@ export async function getServerSideProps(
 			await helpers.compose.one.fetch({
 				composeId: params?.composeId,
 			});
-			await helpers.settings.isCloud.prefetch();
 			return {
 				props: {
 					trpcState: helpers.dehydrate(),
