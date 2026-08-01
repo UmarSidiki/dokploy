@@ -1,5 +1,5 @@
 import path from "node:path";
-import { IS_CLOUD, paths } from "@dokploy/server/constants";
+import { paths } from "@dokploy/server/constants";
 import { getDokployUrl } from "@dokploy/server/services/admin";
 import {
 	createServerDeployment,
@@ -72,7 +72,7 @@ export const serverSetup = async (
 		);
 		await installRequirements(serverId, onData);
 
-		if (IS_CLOUD) {
+		if (!isBuildServer) {
 			onData?.("\nConfiguring Monitoring: 🔄\n");
 
 			const baseUrl = await getDokployUrl();
