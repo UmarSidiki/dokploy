@@ -217,6 +217,8 @@ cd ~
 git clone https://github.com/UmarSidiki/dokploy.git dokploy-custom
 cd dokploy-custom
 
+touch .env.production
+
 # Build the custom Docker image
 sudo docker build -t dokploy-custom:latest -f Dockerfile .
 
