@@ -32,6 +32,18 @@ export const getDokployImageTag = () => {
 	return process.env.RELEASE_TAG || "latest";
 };
 
+/**
+ * Full image reference (repository + tag) for this Dokploy instance.
+ *
+ * Set DOKPLOY_IMAGE to a custom registry/repository to keep the panel pinned to
+ * a self-built image. Without it this resolves to upstream `dokploy/dokploy`,
+ * which is the default drop-in behaviour.
+ */
+export const getDokployImage = (tag: string = getDokployImageTag()) => {
+	const repository = process.env.DOKPLOY_IMAGE || "dokploy/dokploy";
+	return `${repository}:${tag}`;
+};
+
 /** Returns Dokploy docker service image digest */
 export const getServiceImageDigest = async () => {
 	const { stdout } = await execAsync(
@@ -47,11 +59,88 @@ export const getServiceImageDigest = async () => {
 	return currentDigest;
 };
 
+/** Parses `ghcr.io/owner/name` into its registry host and repository path. */
+const parseImageRepository = (image: string) => {
+	const withoutTag = image.split(":")[0] ?? "";
+	const [host, ...rest] = withoutTag.split("/");
+	if (rest.length < 2) {
+		return null;
+	}
+	return { host, repository: rest.join("/") };
+};
+
+/**
+ * Returns the manifest digest published for `tag` in GHCR.
+ *
+ * Image digests are content-addressed, so comparing this against the running
+ * service digest tells us whether a newer build of a custom image exists.
+ * Returns null when the registry is unsupported or the tag is missing.
+ */
+const getGhcrDigest = async (image: string, tag: string) => {
+	const parsed = parseImageRepository(image);
+	if (!parsed || parsed.host !== "ghcr.io") {
+		return null;
+	}
+
+	const { repository } = parsed;
+	const tokenResponse = await fetch(
+		`https://ghcr.io/token?scope=repository:${repository}:pull&service=ghcr.io`,
+	);
+	if (!tokenResponse.ok) {
+		return null;
+	}
+	const { token } = (await tokenResponse.json()) as { token?: string };
+	if (!token) {
+		return null;
+	}
+
+	const manifestResponse = await fetch(
+		`https://ghcr.io/v2/${repository}/manifests/${tag}`,
+		{
+			method: "HEAD",
+			headers: {
+				Authorization: `Bearer ${token}`,
+				Accept: [
+					"application/vnd.oci.image.index.v1+json",
+					"application/vnd.docker.distribution.manifest.list.v2+json",
+					"application/vnd.oci.image.manifest.v1+json",
+					"application/vnd.docker.distribution.manifest.v2+json",
+				].join(", "),
+			},
+		},
+	);
+
+	if (!manifestResponse.ok) {
+		return null;
+	}
+
+	return manifestResponse.headers.get("docker-content-digest");
+};
+
 /** Returns latest version number and information whether server update is available by comparing current image's digest against digest for provided image tag via Docker hub API. */
 export const getUpdateData = async (
 	currentVersion: string,
 ): Promise<IUpdateData> => {
 	try {
+		const currentImageTag = getDokployImageTag();
+
+		// A self-built image has no upstream version to compare against, so the
+		// only meaningful signal is whether the registry digest moved.
+		if (process.env.DOKPLOY_IMAGE) {
+			const currentDigest = await getServiceImageDigest();
+			const remoteDigest = await getGhcrDigest(
+				process.env.DOKPLOY_IMAGE,
+				currentImageTag,
+			);
+			if (!remoteDigest) {
+				return DEFAULT_UPDATE_DATA;
+			}
+			return {
+				latestVersion: currentImageTag,
+				updateAvailable: currentDigest !== remoteDigest,
+			};
+		}
+
 		const baseUrl =
 			"https://hub.docker.com/v2/repositories/dokploy/dokploy/tags";
 		let url: string | null = `${baseUrl}?page_size=100`;
@@ -72,8 +161,6 @@ export const getUpdateData = async (
 			allResults = allResults.concat(data.results);
 			url = data?.next;
 		}
-
-		const currentImageTag = getDokployImageTag();
 
 		// Special handling for canary and feature branches
 		// For development versions (canary/feature), don't perform update checks
@@ -298,7 +385,9 @@ export const reloadDockerResource = async (
 				imageTag = currentImageTag;
 			}
 
-			command = `docker service update --force --image dokploy/dokploy:${imageTag} ${resourceName}`;
+			command = `docker service update --force --image ${getDokployImage(
+				imageTag,
+			)} ${resourceName}`;
 		} else {
 			command = `docker service update --force ${resourceName}`;
 		}

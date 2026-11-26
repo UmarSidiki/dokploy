@@ -23,6 +23,8 @@ vi.mock("@dokploy/server", () => ({
 	findServerById: noop,
 	getDockerDiskUsage: noop,
 	getDockerResourceType: mockGetDockerResourceType,
+	getDokployImage: (tag?: string) =>
+		`${process.env.DOKPLOY_IMAGE || "dokploy/dokploy"}:${tag ?? "latest"}`,
 	getDokployImageTag: () => "canary",
 	getLogCleanupStatus: noop,
 	getUpdateData: mockGetUpdateData,
@@ -145,5 +147,34 @@ describe("settings.updateServer", () => {
 			"docker",
 			expect.arrayContaining(["service", "update", "dokploy/dokploy:v9.9.9"]),
 		);
+	});
+
+	it("keeps the panel on DOKPLOY_IMAGE instead of replacing it with upstream", async () => {
+		process.env.DOKPLOY_IMAGE = "ghcr.io/umarsidiki/dokploy-custom";
+		mockGetDockerResourceType.mockResolvedValue("service");
+		mockGetUpdateData.mockResolvedValue({
+			latestVersion: "latest",
+			updateAvailable: true,
+		});
+		mockSpawnAsync.mockResolvedValue({ stdout: "", stderr: null });
+
+		try {
+			await expect(caller.updateServer()).resolves.toBe(true);
+
+			expect(mockSpawnAsync).toHaveBeenCalledWith(
+				"docker",
+				expect.arrayContaining([
+					"service",
+					"update",
+					"ghcr.io/umarsidiki/dokploy-custom:latest",
+				]),
+			);
+			expect(mockSpawnAsync).not.toHaveBeenCalledWith(
+				"docker",
+				expect.arrayContaining(["dokploy/dokploy:latest"]),
+			);
+		} finally {
+			delete process.env.DOKPLOY_IMAGE;
+		}
 	});
 });
