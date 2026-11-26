@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { GithubIcon } from "@/components/icons/data-tools-icons";
 import { AlertBlock } from "@/components/shared/alert-block";
+import { warnSkippedDomains } from "@/components/shared/skipped-domains-toast";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -435,7 +436,7 @@ export const AddTemplate = ({ environmentId, baseUrl }: Props) => {
 												{viewMode === "detailed" &&
 													template?.tags?.length > 0 && (
 														<div className="flex flex-wrap justify-center gap-1.5">
-															{template?.tags?.map((tag) => (
+															{template.tags.slice(0, 6).map((tag) => (
 																<Badge
 																	key={tag}
 																	variant="green"
@@ -444,6 +445,15 @@ export const AddTemplate = ({ environmentId, baseUrl }: Props) => {
 																	{tag}
 																</Badge>
 															))}
+															{template.tags.length > 6 && (
+																<Badge
+																	variant="green"
+																	className="text-[10px] px-2 py-0"
+																	title={template.tags.slice(6).join(", ")}
+																>
+																	+{template.tags.length - 6}
+																</Badge>
+															)}
 														</div>
 													)}
 											</div>
@@ -613,12 +623,13 @@ export const AddTemplate = ({ environmentId, baseUrl }: Props) => {
 																});
 																toast.promise(promise, {
 																	loading: "Setting up...",
-																	success: () => {
+																	success: ({ skippedDomains }) => {
 																		// Invalidate the project query to refresh the environment data
 																		utils.environment.one.invalidate({
 																			environmentId,
 																		});
 																		setOpen(false);
+																		warnSkippedDomains(skippedDomains);
 																		return `${template.name} template created successfully`;
 																	},
 																	error: () => {

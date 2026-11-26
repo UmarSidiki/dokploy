@@ -6,6 +6,7 @@ import {
 	user,
 } from "@dokploy/server/db/schema";
 import { statements } from "@dokploy/server/lib/access-control";
+import { DOMAIN_PATTERN_REGEX } from "@dokploy/server/services/permission";
 import { TRPCError } from "@trpc/server";
 import { and, count, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -13,10 +14,20 @@ import {
 	createTRPCRouter,
 	enterpriseProcedure,
 	protectedProcedure,
+	requireSensitiveVerification,
 } from "../../trpc";
 import { audit } from "../../utils/audit";
 
 const permissionsSchema = z.record(z.string(), z.array(z.string()));
+
+const allowedDomainsSchema = z
+	.array(z.string())
+	.transform((list) => [
+		...new Set(list.map((d) => d.trim().toLowerCase()).filter(Boolean)),
+	])
+	.refine((list) => list.every((d) => DOMAIN_PATTERN_REGEX.test(d)), {
+		message: "Allowed domains must be wildcards like *.lab.example.com",
+	});
 
 export const customRoleRouter = createTRPCRouter({
 	all: protectedProcedure.query(async ({ ctx }) => {
@@ -43,6 +54,8 @@ export const customRoleRouter = createTRPCRouter({
 			{
 				role: string;
 				permissions: Record<string, string[]>;
+				allowedDomains: string[];
+				requireHttps: boolean;
 				createdAt: Date;
 				ids: string[];
 				memberCount: number;
@@ -59,11 +72,20 @@ export const customRoleRouter = createTRPCRouter({
 						...new Set([...(existing.permissions[resource] ?? []), ...actions]),
 					];
 				}
+				existing.allowedDomains = [
+					...new Set([
+						...existing.allowedDomains,
+						...(entry.allowedDomains ?? []),
+					]),
+				];
+				existing.requireHttps ||= entry.requireHttps;
 				existing.ids.push(entry.id);
 			} else {
 				roleMap.set(entry.role, {
 					role: entry.role,
 					permissions: parsed,
+					allowedDomains: entry.allowedDomains ?? [],
+					requireHttps: entry.requireHttps,
 					createdAt: entry.createdAt,
 					ids: [entry.id],
 					memberCount: memberCountByRole.get(entry.role) ?? 0,
@@ -75,6 +97,7 @@ export const customRoleRouter = createTRPCRouter({
 	}),
 
 	create: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(
 			z.object({
 				roleName: z
@@ -86,6 +109,8 @@ export const customRoleRouter = createTRPCRouter({
 						"Cannot use reserved role names (owner, admin, member)",
 					),
 				permissions: permissionsSchema,
+				allowedDomains: allowedDomainsSchema.optional(),
+				requireHttps: z.boolean().optional(),
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
@@ -113,6 +138,7 @@ export const customRoleRouter = createTRPCRouter({
 			}
 
 			validatePermissions(input.permissions);
+			validateDomainRestriction(input.permissions, input.allowedDomains);
 
 			const [created] = await db
 				.insert(organizationRole)
@@ -120,6 +146,10 @@ export const customRoleRouter = createTRPCRouter({
 					organizationId: ctx.session.activeOrganizationId,
 					role: input.roleName,
 					permission: JSON.stringify(input.permissions),
+					allowedDomains: input.allowedDomains?.length
+						? input.allowedDomains
+						: null,
+					requireHttps: input.requireHttps ?? false,
 				})
 				.returning();
 
@@ -132,6 +162,7 @@ export const customRoleRouter = createTRPCRouter({
 		}),
 
 	update: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(
 			z.object({
 				roleName: z.string().min(1),
@@ -145,6 +176,8 @@ export const customRoleRouter = createTRPCRouter({
 					)
 					.optional(),
 				permissions: permissionsSchema,
+				allowedDomains: allowedDomainsSchema.optional(),
+				requireHttps: z.boolean().optional(),
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
@@ -154,6 +187,24 @@ export const customRoleRouter = createTRPCRouter({
 					message: "Cannot modify built-in roles",
 				});
 			}
+
+			validatePermissions(input.permissions);
+
+			let allowedDomains = input.allowedDomains;
+			if (allowedDomains === undefined) {
+				const rows = await db.query.organizationRole.findMany({
+					where: and(
+						eq(
+							organizationRole.organizationId,
+							ctx.session.activeOrganizationId,
+						),
+						eq(organizationRole.role, input.roleName),
+					),
+					columns: { allowedDomains: true },
+				});
+				allowedDomains = rows.flatMap((row) => row.allowedDomains ?? []);
+			}
+			validateDomainRestriction(input.permissions, allowedDomains);
 
 			const effectiveRoleName = input.newRoleName ?? input.roleName;
 
@@ -185,13 +236,19 @@ export const customRoleRouter = createTRPCRouter({
 					);
 			}
 
-			validatePermissions(input.permissions);
-
 			const [updated] = await db
 				.update(organizationRole)
 				.set({
 					role: effectiveRoleName,
 					permission: JSON.stringify(input.permissions),
+					...(input.allowedDomains !== undefined && {
+						allowedDomains: input.allowedDomains.length
+							? input.allowedDomains
+							: null,
+					}),
+					...(input.requireHttps !== undefined && {
+						requireHttps: input.requireHttps,
+					}),
 				})
 				.where(
 					and(
@@ -213,6 +270,7 @@ export const customRoleRouter = createTRPCRouter({
 		}),
 
 	remove: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(
 			z.object({
 				roleName: z.string().min(1),
@@ -332,5 +390,24 @@ function validatePermissions(permissions: Record<string, string[]>) {
 				});
 			}
 		}
+	}
+}
+
+// Both can publish any host outside the domain checks: traefikFiles:write by
+// editing router configs, server.terminal through a root shell on the host.
+function validateDomainRestriction(
+	permissions: Record<string, string[]>,
+	allowedDomains: string[] | undefined,
+) {
+	if (!allowedDomains?.length) return;
+	if (
+		permissions.traefikFiles?.includes("write") ||
+		permissions.server?.includes("terminal")
+	) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message:
+				"Roles with allowed domains cannot have Traefik files write or server terminal permissions",
+		});
 	}
 }

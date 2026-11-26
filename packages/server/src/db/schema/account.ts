@@ -67,6 +67,11 @@ export const organization = pgTable("organization", {
 	createdAt: timestamp("created_at").notNull(),
 	metadata: text("metadata"),
 	defaultRole: text("default_role"),
+	requireSensitiveActionVerification: boolean(
+		"require_sensitive_action_verification",
+	)
+		.notNull()
+		.default(false),
 	ownerId: text("owner_id")
 		.notNull()
 		.references(() => user.id, { onDelete: "cascade" }),
@@ -83,6 +88,8 @@ export const organizationRole = pgTable(
 			.references(() => organization.id, { onDelete: "cascade" }),
 		role: text("role").notNull(),
 		permission: text("permission").notNull(),
+		allowedDomains: text("allowed_domains").array(),
+		requireHttps: boolean("require_https").notNull().default(false),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at").$onUpdate(() => new Date()),
 	},

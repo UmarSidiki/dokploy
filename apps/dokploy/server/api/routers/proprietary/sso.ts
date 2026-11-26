@@ -1,14 +1,17 @@
 import { normalizeTrustedOrigin } from "@dokploy/server";
 import { IS_CLOUD } from "@dokploy/server/constants";
 import { db } from "@dokploy/server/db";
-import { member, ssoProvider, user } from "@dokploy/server/db/schema";
+import { ssoProvider, user } from "@dokploy/server/db/schema";
 import { ssoProviderBodySchema } from "@dokploy/server/db/schema/sso";
 import {
 	getOrganizationOwnerId,
 	requestToHeaders,
 } from "@dokploy/server/index";
 import { auth } from "@dokploy/server/lib/auth";
-import { invalidateTrustedOriginsCache } from "@dokploy/server/services/admin";
+import {
+	getInstanceOwnerId,
+	invalidateTrustedOriginsCache,
+} from "@dokploy/server/services/admin";
 import { getWebServerSettings } from "@dokploy/server/services/web-server-settings";
 import { TRPCError } from "@trpc/server";
 import { and, asc, eq } from "drizzle-orm";
@@ -17,6 +20,7 @@ import {
 	createTRPCRouter,
 	enterpriseProcedure,
 	publicProcedure,
+	requireSensitiveVerification,
 } from "@/server/api/trpc";
 
 export const ssoRouter = createTRPCRouter({
@@ -24,25 +28,21 @@ export const ssoRouter = createTRPCRouter({
 		if (IS_CLOUD) {
 			return true;
 		}
-		const owner = await db.query.member.findFirst({
-			where: eq(member.role, "owner"),
-			with: {
-				user: {
-					columns: {
-						enableEnterpriseFeatures: true,
-						isValidEnterpriseLicense: true,
-					},
-				},
-			},
-			orderBy: [asc(member.createdAt)],
-		});
-
-		if (!owner) {
+		const ownerId = await getInstanceOwnerId();
+		if (!ownerId) {
 			return false;
 		}
 
-		return (
-			owner.user.enableEnterpriseFeatures && owner.user.isValidEnterpriseLicense
+		const owner = await db.query.user.findFirst({
+			where: eq(user.id, ownerId),
+			columns: {
+				enableEnterpriseFeatures: true,
+				isValidEnterpriseLicense: true,
+			},
+		});
+
+		return !!(
+			owner?.enableEnterpriseFeatures && owner.isValidEnterpriseLicense
 		);
 	}),
 	enforceSSO: publicProcedure.query(async () => {
@@ -107,6 +107,7 @@ export const ssoRouter = createTRPCRouter({
 			return provider;
 		}),
 	update: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(ssoProviderBodySchema)
 		.mutation(async ({ ctx, input }) => {
 			const existing = await db.query.ssoProvider.findFirst({
@@ -215,6 +216,7 @@ export const ssoRouter = createTRPCRouter({
 			return { success: true };
 		}),
 	deleteProvider: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(z.object({ providerId: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
 			// Obtener el provider antes de eliminarlo para obtener sus dominios
@@ -259,6 +261,7 @@ export const ssoRouter = createTRPCRouter({
 			return { success: true };
 		}),
 	register: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(ssoProviderBodySchema)
 		.mutation(async ({ ctx, input }) => {
 			const organizationId = ctx.session.activeOrganizationId;
@@ -295,6 +298,7 @@ export const ssoRouter = createTRPCRouter({
 			return { success: true };
 		}),
 	addTrustedOrigin: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(z.object({ origin: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
 			const ownerId = await getOrganizationOwnerId(
@@ -324,6 +328,7 @@ export const ssoRouter = createTRPCRouter({
 			return { success: true };
 		}),
 	removeTrustedOrigin: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(z.object({ origin: z.string().min(1) }))
 		.mutation(async ({ ctx, input }) => {
 			const ownerId = await getOrganizationOwnerId(
@@ -352,6 +357,7 @@ export const ssoRouter = createTRPCRouter({
 			return { success: true };
 		}),
 	updateTrustedOrigin: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(
 			z.object({
 				oldOrigin: z.string().min(1),

@@ -1,4 +1,5 @@
 import {
+	assertServerAccess,
 	type DockerNode,
 	execAsync,
 	execAsyncRemote,
@@ -10,7 +11,11 @@ import { quote } from "shell-quote";
 import { z } from "zod";
 import { audit } from "@/server/api/utils/audit";
 import { getLocalServerIp } from "@/server/wss/terminal";
-import { createTRPCRouter, withPermission } from "../trpc";
+import {
+	createTRPCRouter,
+	requireSensitiveVerification,
+	withPermission,
+} from "../trpc";
 
 export const clusterRouter = createTRPCRouter({
 	getNodes: withPermission("docker", "read")
@@ -20,6 +25,7 @@ export const clusterRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const targetServer = await findServerById(input.serverId);
 				if (targetServer.organizationId !== ctx.session.activeOrganizationId) {
@@ -35,6 +41,7 @@ export const clusterRouter = createTRPCRouter({
 		}),
 
 	removeWorker: withPermission("server", "delete")
+		.use(requireSensitiveVerification)
 		.input(
 			z.object({
 				nodeId: z.string(),
@@ -42,6 +49,7 @@ export const clusterRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const targetServer = await findServerById(input.serverId);
 				if (targetServer.organizationId !== ctx.session.activeOrganizationId) {
@@ -85,6 +93,7 @@ export const clusterRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const targetServer = await findServerById(input.serverId);
 				if (targetServer.organizationId !== ctx.session.activeOrganizationId) {
@@ -119,6 +128,7 @@ export const clusterRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const targetServer = await findServerById(input.serverId);
 				if (targetServer.organizationId !== ctx.session.activeOrganizationId) {

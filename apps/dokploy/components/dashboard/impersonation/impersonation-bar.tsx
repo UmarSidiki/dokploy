@@ -43,9 +43,11 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { authClient } from "@/lib/auth-client";
+import { withSensitiveVerification } from "@/lib/sensitive-action";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 import { useWhitelabeling } from "@/utils/hooks/use-whitelabeling";
+import { DeleteAccountByEmail } from "./delete-account-by-email";
 
 type User = typeof authClient.$Infer.Session.user;
 
@@ -78,12 +80,12 @@ export const ImpersonationBar = () => {
 			});
 
 			const filteredUsers = response.data?.users.filter(
-				// @ts-ignore
+				// @ts-expect-error
 				(user) => user.allowImpersonation && data?.user?.email !== user.email,
 			);
 
 			if (!response.error) {
-				// @ts-ignore
+				// @ts-expect-error
 				setUsers(filteredUsers || []);
 			}
 		} catch (error) {
@@ -98,9 +100,13 @@ export const ImpersonationBar = () => {
 		if (!selectedUser) return;
 
 		try {
-			await authClient.admin.impersonateUser({
-				userId: selectedUser.id,
-			});
+			const { error } = await withSensitiveVerification(() =>
+				authClient.admin.impersonateUser({ userId: selectedUser.id }),
+			);
+			if (error) {
+				toast.error(error.message || "Failed to impersonate user");
+				return;
+			}
 			setIsImpersonating(true);
 			setOpen(false);
 
@@ -185,6 +191,7 @@ export const ImpersonationBar = () => {
 						<Logo
 							className="w-10 h-10"
 							logoUrl={whitelabeling?.logoUrl || undefined}
+							logoLightUrl={whitelabeling?.logoLightUrl || undefined}
 						/>
 						{!isImpersonating ? (
 							<div className="flex items-center gap-2 w-full">
@@ -282,6 +289,7 @@ export const ImpersonationBar = () => {
 									<Shield className="h-4 w-4" />
 									Impersonate
 								</Button>
+								<DeleteAccountByEmail />
 							</div>
 						) : (
 							<div className="flex items-center gap-4 w-full flex-wrap">

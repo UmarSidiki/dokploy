@@ -38,6 +38,7 @@ import {
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { authClient } from "@/lib/auth-client";
+import { withSensitiveVerification } from "@/lib/sensitive-action";
 import { api } from "@/utils/api";
 
 const PasswordSchema = z.object({
@@ -167,10 +168,12 @@ export const Enable2FA = () => {
 	const handlePasswordSubmit = async (formData: PasswordForm) => {
 		setIsPasswordLoading(true);
 		try {
-			const { data: enableData, error } = await authClient.twoFactor.enable({
-				password: formData.password,
-				issuer: formData.issuer,
-			});
+			const { data: enableData, error } = await withSensitiveVerification(() =>
+				authClient.twoFactor.enable({
+					password: formData.password,
+					issuer: formData.issuer,
+				}),
+			);
 
 			if (!enableData) {
 				throw new Error(error?.message || "Error enabling 2FA");
@@ -333,7 +336,8 @@ export const Enable2FA = () => {
 				) : (
 					<Form {...pinForm}>
 						<form onSubmit={handleVerifySubmit} className="space-y-6">
-							<div className="flex flex-col gap-6 justify-center items-center">
+							{/* ph-no-capture keeps the TOTP secret, QR code and backup codes out of session replay. */}
+							<div className="ph-no-capture flex flex-col gap-6 justify-center items-center">
 								{data?.qrCodeUrl ? (
 									<>
 										<div className="flex flex-col items-center gap-4 p-6 border rounded-lg">

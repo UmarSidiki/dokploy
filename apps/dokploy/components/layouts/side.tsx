@@ -7,6 +7,7 @@ import {
 	BlocksIcon,
 	BookIcon,
 	BotIcon,
+	Box,
 	Boxes,
 	ChevronRight,
 	ChevronsUpDown,
@@ -29,6 +30,7 @@ import {
 	type LucideIcon,
 	Package,
 	Palette,
+	ScrollText,
 	Server,
 	ShieldCheck,
 	Smartphone,
@@ -101,6 +103,7 @@ import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import type { AppRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
+import { TrialBanner } from "../dashboard/billing/trial-banner";
 import { AddOrganization } from "../dashboard/organization/handle-organization";
 import { DialogAction } from "../shared/dialog-action";
 import { Logo } from "../shared/logo";
@@ -190,9 +193,11 @@ const MENU: Menu = {
 			title: "Monitoring",
 			url: "/dashboard/monitoring",
 			icon: BarChartHorizontalBigIcon,
-			// Only enabled in non-cloud environments and if user has monitoring.read
+			// Only enabled in non-cloud environments (product decision) and if user has monitoring.read and docker.read
 			isEnabled: ({ isCloud, permissions }) =>
-				!isCloud && !!permissions?.monitoring.read,
+				!isCloud &&
+				!!permissions?.monitoring.read &&
+				!!permissions?.docker.read,
 		},
 		{
 			isSingle: true,
@@ -200,6 +205,13 @@ const MENU: Menu = {
 			url: "/dashboard/schedules",
 			icon: Clock,
 			isEnabled: ({ permissions }) => !!permissions?.organization.update,
+		},
+		{
+			isSingle: true,
+			title: "Sandboxes",
+			url: "/dashboard/sandboxes",
+			icon: Box,
+			isEnabled: ({ permissions }) => !!permissions?.sandbox.read,
 		},
 		{
 			isSingle: true,
@@ -349,7 +361,13 @@ const MENU: Menu = {
 			icon: BotIcon,
 			url: "/dashboard/settings/ai",
 			isSingle: true,
-			isEnabled: ({ permissions }) => !!permissions?.organization.update,
+			isEnabled: ({ permissions }) =>
+				!!(
+					permissions?.ai.read ||
+					permissions?.ai.create ||
+					permissions?.ai.update ||
+					permissions?.ai.delete
+				),
 		},
 		{
 			isSingle: true,
@@ -372,6 +390,13 @@ const MENU: Menu = {
 			url: "/dashboard/settings/registry",
 			icon: Package,
 			isEnabled: ({ permissions }) => !!permissions?.registry.read,
+		},
+		{
+			isSingle: true,
+			title: "Logs & Metrics",
+			url: "/dashboard/settings/logs-and-metrics",
+			icon: ScrollText,
+			isEnabled: ({ permissions }) => !!permissions?.telemetryProvider.read,
 		},
 		{
 			isSingle: true,
@@ -590,6 +615,11 @@ function SidebarLogo() {
 
 	const { data: invitations, refetch: refetchInvitations } =
 		api.user.getInvitations.useQuery();
+	const { data: ownershipTransfer } = api.ownershipTransfer.incoming.useQuery(
+		undefined,
+		{ enabled: isCloud === false },
+	);
+	const pendingCount = (invitations?.length ?? 0) + (ownershipTransfer ? 1 : 0);
 
 	const [_activeTeam, setActiveTeam] = useState<
 		typeof activeOrganization | null
@@ -815,9 +845,7 @@ function SidebarLogo() {
 											})}
 										</CommandGroup>
 									</CommandList>
-									{(user?.role === "owner" ||
-										user?.role === "admin" ||
-										isCloud) && (
+									{(isCloud || user?.isInstanceOwner) && (
 										<div className="border-t p-1">
 											<AddOrganization />
 										</div>
@@ -840,9 +868,9 @@ function SidebarLogo() {
 									)}
 								>
 									<Bell className="size-4" />
-									{invitations && invitations.length > 0 && (
+									{pendingCount > 0 && (
 										<span className="absolute top-0 right-0 flex size-4 items-center justify-center rounded-full bg-blue-500 text-xs text-white">
-											{invitations.length}
+											{pendingCount}
 										</span>
 									)}
 								</Button>
@@ -854,6 +882,27 @@ function SidebarLogo() {
 							>
 								<DropdownMenuLabel>Pending Invitations</DropdownMenuLabel>
 								<div className="flex flex-col gap-2">
+									{ownershipTransfer && (
+										<DropdownMenuItem
+											asChild
+											className="flex flex-col items-start gap-1 p-3"
+										>
+											<Link href="/ownership-transfer">
+												<div className="font-medium">
+													Instance ownership transfer
+												</div>
+												<div className="text-xs text-muted-foreground break-words">
+													From: {ownershipTransfer.fromUser.email}
+												</div>
+												<div className="text-xs text-muted-foreground">
+													Expires:{" "}
+													{new Date(
+														ownershipTransfer.expiresAt,
+													).toLocaleString()}
+												</div>
+											</Link>
+										</DropdownMenuItem>
+									)}
 									{invitations && invitations.length > 0 ? (
 										invitations.map((invitation) => (
 											<div key={invitation.id} className="flex flex-col gap-2">
@@ -899,11 +948,11 @@ function SidebarLogo() {
 												</DialogAction>
 											</div>
 										))
-									) : (
+									) : pendingCount === 0 ? (
 										<DropdownMenuItem disabled>
 											No pending invitations
 										</DropdownMenuItem>
-									)}
+									) : null}
 								</div>
 							</DropdownMenuContent>
 						</DropdownMenu>
@@ -1229,6 +1278,7 @@ export default function Page({ children }: Props) {
 				<SidebarRail />
 			</Sidebar>
 			<SidebarInset>
+				{isCloud === true && <TrialBanner />}
 				{!includesProjects && (
 					<header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
 						<div className="flex items-center justify-between w-full px-4">

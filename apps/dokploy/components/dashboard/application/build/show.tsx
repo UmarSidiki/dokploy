@@ -31,6 +31,45 @@ import { api } from "@/utils/api";
 
 // Railpack versions from https://github.com/railwayapp/railpack/releases
 export const RAILPACK_VERSIONS = [
+	"0.39.0",
+	"0.38.0",
+	"0.37.1",
+	"0.37.0",
+	"0.36.4",
+	"0.36.3",
+	"0.36.2",
+	"0.36.1",
+	"0.36.0",
+	"0.35.0",
+	"0.34.0",
+	"0.33.0",
+	"0.32.0",
+	"0.31.2",
+	"0.31.1",
+	"0.31.0",
+	"0.30.1",
+	"0.30.0",
+	"0.29.0",
+	"0.28.0",
+	"0.27.2",
+	"0.27.1",
+	"0.27.0",
+	"0.26.1",
+	"0.26.0",
+	"0.25.0",
+	"0.24.0",
+	"0.23.0",
+	"0.22.2",
+	"0.22.1",
+	"0.22.0",
+	"0.21.0",
+	"0.20.0",
+	"0.19.0",
+	"0.18.0",
+	"0.17.2",
+	"0.17.1",
+	"0.17.0",
+	"0.16.0",
 	"0.15.4",
 	"0.15.3",
 	"0.15.2",
@@ -45,12 +84,22 @@ export const RAILPACK_VERSIONS = [
 	"0.9.1",
 	"0.9.0",
 	"0.8.0",
+	"0.7.2",
+	"0.7.1",
 	"0.7.0",
+	"0.6.1",
 	"0.6.0",
+	"0.5.1",
 	"0.5.0",
 	"0.4.0",
 	"0.3.0",
+	"0.2.3",
 	"0.2.2",
+	"0.2.1",
+	"0.2.0",
+	"0.1.2",
+	"0.1.1",
+	"0.1.0",
 ] as const;
 
 export enum BuildType {
@@ -345,10 +394,19 @@ export const ShowBuildChooseForm = ({ applicationId }: Props) => {
 									name="dockerfile"
 									render={({ field }) => (
 										<FormItem>
-											<FormLabel>Docker File</FormLabel>
+											<div className="space-y-0.5">
+												<FormLabel>Docker File</FormLabel>
+												<FormDescription>
+													Path relative to the Build Path. If empty,{" "}
+													<code className="bg-muted px-1.5 py-0.5 rounded text-xs">
+														Dockerfile
+													</code>{" "}
+													is used.
+												</FormDescription>
+											</div>
 											<FormControl>
 												<Input
-													placeholder="Path of your docker file (default: Dockerfile)"
+													placeholder="E.g. Dockerfile"
 													{...field}
 													value={field.value ?? ""}
 												/>
@@ -362,10 +420,19 @@ export const ShowBuildChooseForm = ({ applicationId }: Props) => {
 									name="dockerContextPath"
 									render={({ field }) => (
 										<FormItem>
-											<FormLabel>Docker Context Path</FormLabel>
+											<div className="space-y-0.5">
+												<FormLabel>Docker Context Path</FormLabel>
+												<FormDescription>
+													If empty, the Dockerfile's folder is used. Use{" "}
+													<code className="bg-muted px-1.5 py-0.5 rounded text-xs">
+														.
+													</code>{" "}
+													for the repository root.
+												</FormDescription>
+											</div>
 											<FormControl>
 												<Input
-													placeholder="Path of your docker context (default: .)"
+													placeholder="E.g. ."
 													{...field}
 													value={field.value ?? ""}
 												/>

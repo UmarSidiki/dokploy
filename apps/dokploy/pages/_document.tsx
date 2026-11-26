@@ -9,17 +9,33 @@ import NextDocument, {
 } from "next/document";
 
 interface WhitelabelingDocumentProps {
-	metaTitle: string | null;
+	appName: string | null;
+	appDescription: string | null;
+	ogImageUrl: string | null;
 	faviconHref: string | null;
+	faviconLightHref: string | null;
 	customCss: string | null;
+	baseUrl: string;
 }
 
 export default function Document({
-	metaTitle,
+	appName,
+	appDescription,
+	ogImageUrl,
 	faviconHref,
+	faviconLightHref,
 	customCss,
+	baseUrl,
 }: WhitelabelingDocumentProps) {
-	const title = metaTitle || "Dokploy";
+	const title = appName || "Dokploy";
+	const description =
+		appDescription || "The Open Source alternative to Netlify, Vercel, Heroku.";
+
+	let ogImage = ogImageUrl || "/og.png";
+	if (ogImage.startsWith("/")) {
+		ogImage = `${baseUrl}${ogImage}`;
+	}
+
 	return (
 		<Html lang="en" className="font-sans">
 			<Head>
@@ -27,7 +43,25 @@ export default function Document({
 				    paint (and for social scrapers), avoiding a flash of / fallback to
 				    the default Dokploy branding. */}
 				<title>{title}</title>
-				<link rel="icon" href={faviconHref || "/icon.svg"} />
+				<meta property="og:title" content={title} />
+				<meta property="og:description" content={description} />
+				<meta property="og:image" content={ogImage} />
+				{faviconLightHref ? (
+					<>
+						<link
+							rel="icon"
+							href={faviconHref || "/icon.svg"}
+							media="(prefers-color-scheme: dark)"
+						/>
+						<link
+							rel="icon"
+							href={faviconLightHref}
+							media="(prefers-color-scheme: light)"
+						/>
+					</>
+				) : (
+					<link rel="icon" href={faviconHref || "/icon.svg"} />
+				)}
 				{customCss && (
 					<style
 						id="whitelabeling-styles"
@@ -48,8 +82,11 @@ const SETTINGS_CACHE_TTL = 60 * 1000; // 1 minute
 declare global {
 	var __SETTINGS_CACHE: {
 		data: {
-			metaTitle: string | null;
+			appName: string | null;
+			appDescription: string | null;
+			ogImageUrl: string | null;
 			faviconHref: string | null;
+			faviconLightHref: string | null;
 			customCss: string | null;
 		};
 		expiresAt: number;
@@ -61,9 +98,16 @@ Document.getInitialProps = async (
 ): Promise<DocumentInitialProps & WhitelabelingDocumentProps> => {
 	const initialProps = await NextDocument.getInitialProps(ctx);
 
-	let metaTitle: string | null = null;
+	let appName: string | null = null;
+	let appDescription: string | null = null;
+	let ogImageUrl: string | null = null;
 	let faviconHref: string | null = null;
+	let faviconLightHref: string | null = null;
 	let customCss: string | null = null;
+
+	const host = ctx.req?.headers?.host || "localhost:3000";
+	const protocol = ctx.req?.headers?.["x-forwarded-proto"] || "http";
+	const baseUrl = `${protocol}://${host}`;
 
 	if (
 		globalThis.__SETTINGS_CACHE &&
@@ -73,18 +117,22 @@ Document.getInitialProps = async (
 		return {
 			...initialProps,
 			...globalThis.__SETTINGS_CACHE.data,
+			baseUrl,
 		};
 	}
 
 	try {
 		const config = await getPublicWhitelabelingConfig();
 		if (config) {
-			metaTitle = config.metaTitle;
-			// Remove any </style> tags to prevent XSS breakout
+			appName = config.appName;
+			appDescription = config.appDescription;
+			ogImageUrl = config.ogImageUrl;
+			// A raw "<" could close the <style> block; "\3C " is the same character to CSS.
 			customCss = config.customCss
-				? config.customCss.replace(/<\/\s*style[^>]*>/gi, "")
+				? config.customCss.replace(/</g, "\\3C ")
 				: null;
 			faviconHref = config.faviconUrl || null;
+			faviconLightHref = config.faviconLightUrl || null;
 		}
 	} catch {
 		// Fall back to defaults if settings can't be read (e.g. DB not ready)
@@ -92,8 +140,11 @@ Document.getInitialProps = async (
 
 	globalThis.__SETTINGS_CACHE = {
 		data: {
-			metaTitle,
+			appName,
+			appDescription,
+			ogImageUrl,
 			faviconHref,
+			faviconLightHref,
 			customCss,
 		},
 		expiresAt: Date.now() + SETTINGS_CACHE_TTL,
@@ -101,8 +152,12 @@ Document.getInitialProps = async (
 
 	return {
 		...initialProps,
-		metaTitle,
+		appName,
+		appDescription,
+		ogImageUrl,
 		faviconHref,
+		faviconLightHref,
 		customCss,
+		baseUrl,
 	};
 };

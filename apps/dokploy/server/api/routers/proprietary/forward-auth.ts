@@ -12,17 +12,24 @@ import {
 	removeForwardAuthProxy,
 	removeForwardAuthSettings,
 	setForwardAuthSettings,
+	setPreviewForwardAuth,
+	setSsoAllowlist,
 } from "@dokploy/server";
 import {
 	apiDeployForwardAuthOnServer,
 	apiForwardAuthDomainTarget,
 	apiForwardAuthServerTarget,
 	apiSetForwardAuthSettings,
+	apiSetPreviewForwardAuth,
+	apiSetSsoAllowlist,
 } from "@dokploy/server/db/schema";
+import { checkServicePermissionAndAccess } from "@dokploy/server/services/permission";
+import { hasValidLicense } from "@dokploy/server/services/proprietary/license-key";
 import { TRPCError } from "@trpc/server";
 import {
 	createTRPCRouter,
 	enterpriseProcedure,
+	requireSensitiveVerification,
 	withPermission,
 } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
@@ -55,6 +62,7 @@ export const forwardAuthRouter = createTRPCRouter({
 		}),
 
 	setAuthDomain: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(apiSetForwardAuthSettings)
 		.mutation(async ({ ctx, input }) => {
 			if (input.serverId) {
@@ -84,6 +92,7 @@ export const forwardAuthRouter = createTRPCRouter({
 		}),
 
 	removeAuthDomain: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(apiForwardAuthServerTarget)
 		.mutation(async ({ ctx, input }) => {
 			if (input.serverId) {
@@ -140,6 +149,7 @@ export const forwardAuthRouter = createTRPCRouter({
 		}),
 
 	removeOnServer: enterpriseProcedure
+		.use(requireSensitiveVerification)
 		.input(apiForwardAuthServerTarget)
 		.mutation(async ({ ctx, input }) => {
 			if (input.serverId) {
@@ -166,6 +176,7 @@ export const forwardAuthRouter = createTRPCRouter({
 		.query(({ ctx, input }) => getDomainSsoStatus(ctx, input.domainId)),
 
 	enable: withPermission("domain", "create")
+		.use(requireSensitiveVerification)
 		.input(apiForwardAuthDomainTarget)
 		.mutation(async ({ ctx, input }) => {
 			const domain = await assertApplicationDomainAccess(
@@ -186,6 +197,7 @@ export const forwardAuthRouter = createTRPCRouter({
 		}),
 
 	disable: withPermission("domain", "create")
+		.use(requireSensitiveVerification)
 		.input(apiForwardAuthDomainTarget)
 		.mutation(async ({ ctx, input }) => {
 			const domain = await assertApplicationDomainAccess(
@@ -203,5 +215,60 @@ export const forwardAuthRouter = createTRPCRouter({
 				resourceName: domain.host,
 			});
 			return result;
+		}),
+
+	setPreviewEnabled: withPermission("domain", "create")
+		.input(apiSetPreviewForwardAuth)
+		.mutation(async ({ ctx, input }) => {
+			await checkServicePermissionAndAccess(ctx, input.applicationId, {
+				domain: ["create"],
+			});
+			// Disabling stays allowed so an expired license can't leave previews locked.
+			if (
+				input.enabled &&
+				!(await hasValidLicense(ctx.session.activeOrganizationId))
+			) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Valid enterprise license required",
+				});
+			}
+			const application = await setPreviewForwardAuth(input);
+			await audit(ctx, {
+				action: "update",
+				resourceType: "application",
+				resourceId: application.applicationId,
+				resourceName: application.appName,
+			});
+			return { ok: true } as const;
+		}),
+
+	setAllowlist: withPermission("domain", "create")
+		.use(requireSensitiveVerification)
+		.input(apiSetSsoAllowlist)
+		.mutation(async ({ ctx, input }) => {
+			await checkServicePermissionAndAccess(ctx, input.applicationId, {
+				domain: ["create"],
+			});
+			const restricts = [input.emails, input.groups, input.emailDomains].some(
+				(list) => list?.length,
+			);
+			if (
+				restricts &&
+				!(await hasValidLicense(ctx.session.activeOrganizationId))
+			) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Valid enterprise license required",
+				});
+			}
+			const application = await setSsoAllowlist(input);
+			await audit(ctx, {
+				action: "update",
+				resourceType: "application",
+				resourceId: application.applicationId,
+				resourceName: application.appName,
+			});
+			return { ok: true } as const;
 		}),
 });

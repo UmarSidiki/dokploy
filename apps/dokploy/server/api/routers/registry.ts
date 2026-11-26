@@ -1,11 +1,10 @@
 import {
+	assertServerAccess,
 	createRegistry,
-	execAsyncRemote,
-	execFileAsync,
+	dockerLogin,
 	findRegistryById,
 	IS_CLOUD,
 	removeRegistry,
-	safeDockerLoginCommand,
 	updateRegistry,
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
@@ -21,9 +20,14 @@ import {
 	apiUpdateRegistry,
 	registry,
 } from "@/server/db/schema";
-import { createTRPCRouter, withPermission } from "../trpc";
+import {
+	createTRPCRouter,
+	requireSensitiveVerification,
+	withPermission,
+} from "../trpc";
 export const registryRouter = createTRPCRouter({
 	create: withPermission("registry", "create")
+		.use(requireSensitiveVerification)
 		.input(apiCreateRegistry)
 		.mutation(async ({ ctx, input }) => {
 			const reg = await createRegistry(input, ctx.session.activeOrganizationId);
@@ -36,6 +40,7 @@ export const registryRouter = createTRPCRouter({
 			return reg;
 		}),
 	remove: withPermission("registry", "delete")
+		.use(requireSensitiveVerification)
 		.input(apiRemoveRegistry)
 		.mutation(async ({ ctx, input }) => {
 			const registry = await findRegistryById(input.registryId);
@@ -51,9 +56,13 @@ export const registryRouter = createTRPCRouter({
 				resourceId: registry.registryId,
 				resourceName: registry.registryName,
 			});
-			return await removeRegistry(input.registryId);
+			const { password: _password, ...removed } = await removeRegistry(
+				input.registryId,
+			);
+			return removed;
 		}),
 	update: withPermission("registry", "create")
+		.use(requireSensitiveVerification)
 		.input(apiUpdateRegistry)
 		.mutation(async ({ input, ctx }) => {
 			const { registryId, ...rest } = input;
@@ -86,6 +95,7 @@ export const registryRouter = createTRPCRouter({
 	all: withPermission("registry", "read").query(async ({ ctx }) => {
 		const registryResponse = await db.query.registry.findMany({
 			where: eq(registry.organizationId, ctx.session.activeOrganizationId),
+			columns: { password: false },
 		});
 		return registryResponse;
 	}),
@@ -103,16 +113,9 @@ export const registryRouter = createTRPCRouter({
 		}),
 	testRegistry: withPermission("registry", "read")
 		.input(apiTestRegistry)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			try {
-				const args = [
-					"login",
-					input.registryUrl,
-					"--username",
-					input.username,
-					"--password-stdin",
-				];
-
 				if (IS_CLOUD && !input.serverId) {
 					throw new TRPCError({
 						code: "NOT_FOUND",
@@ -120,20 +123,12 @@ export const registryRouter = createTRPCRouter({
 					});
 				}
 
-				if (input.serverId && input.serverId !== "none") {
-					await execAsyncRemote(
-						input.serverId,
-						safeDockerLoginCommand(
-							input.registryUrl,
-							input.username,
-							input.password,
-						),
-					);
-				} else {
-					await execFileAsync("docker", args, {
-						input: Buffer.from(input.password).toString(),
-					});
-				}
+				await dockerLogin(
+					input.registryUrl,
+					input.username,
+					input.password,
+					input.serverId,
+				);
 
 				return true;
 			} catch (error) {
@@ -150,6 +145,7 @@ export const registryRouter = createTRPCRouter({
 	testRegistryById: withPermission("registry", "read")
 		.input(apiTestRegistryById)
 		.mutation(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			try {
 				const registryData = await db.query.registry.findFirst({
 					where: eq(registry.registryId, input.registryId ?? ""),
@@ -169,14 +165,6 @@ export const registryRouter = createTRPCRouter({
 					});
 				}
 
-				const args = [
-					"login",
-					registryData.registryUrl,
-					"--username",
-					registryData.username,
-					"--password-stdin",
-				];
-
 				if (IS_CLOUD && !input.serverId) {
 					throw new TRPCError({
 						code: "NOT_FOUND",
@@ -184,20 +172,12 @@ export const registryRouter = createTRPCRouter({
 					});
 				}
 
-				if (input.serverId && input.serverId !== "none") {
-					await execAsyncRemote(
-						input.serverId,
-						safeDockerLoginCommand(
-							registryData.registryUrl,
-							registryData.username,
-							registryData.password,
-						),
-					);
-				} else {
-					await execFileAsync("docker", args, {
-						input: Buffer.from(registryData.password).toString(),
-					});
-				}
+				await dockerLogin(
+					registryData.registryUrl,
+					registryData.username,
+					registryData.password,
+					input.serverId,
+				);
 
 				return true;
 			} catch (error) {

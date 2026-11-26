@@ -14,6 +14,7 @@ import { TRPCError } from "@trpc/server";
 import {
 	createTRPCRouter,
 	protectedProcedure,
+	requireSensitiveVerification,
 	withPermission,
 } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
@@ -104,21 +105,23 @@ export const githubRouter = createTRPCRouter({
 			}
 		}),
 	update: withPermission("gitProviders", "create")
+		.use(requireSensitiveVerification)
 		.input(apiUpdateGithub)
 		.mutation(async ({ input, ctx }) => {
-			await updateGitProvider(input.gitProviderId, {
+			const existing = await findGithubById(input.githubId);
+			await assertGitProviderAccess(ctx.session, existing.gitProvider);
+			const { gitProviderId, ...data } = input;
+			await updateGitProvider(existing.gitProvider.gitProviderId, {
 				name: input.name,
 				organizationId: ctx.session.activeOrganizationId,
 			});
 
-			await updateGithub(input.githubId, {
-				...input,
-			});
+			await updateGithub(input.githubId, data);
 
 			await audit(ctx, {
 				action: "update",
 				resourceType: "gitProvider",
-				resourceId: input.gitProviderId,
+				resourceId: existing.gitProvider.gitProviderId,
 				resourceName: input.name,
 			});
 		}),

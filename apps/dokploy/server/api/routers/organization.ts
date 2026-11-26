@@ -1,8 +1,10 @@
 import { db } from "@dokploy/server/db";
 import {
+	deleteOrganization,
 	hasValidLicense,
 	IS_CLOUD,
 	sendInvitationEmail,
+	withInstanceOwnerLock,
 } from "@dokploy/server/index";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, exists } from "drizzle-orm";
@@ -20,7 +22,12 @@ import {
 	organizationRole,
 	user,
 } from "@/server/db/schema";
-import { createTRPCRouter, protectedProcedure, withPermission } from "../trpc";
+import {
+	createTRPCRouter,
+	protectedProcedure,
+	requireSensitiveVerification,
+	withPermission,
+} from "../trpc";
 export const organizationRouter = createTRPCRouter({
 	create: protectedProcedure
 		.input(
@@ -30,46 +37,61 @@ export const organizationRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			if (ctx.user.role !== "owner" && ctx.user.role !== "admin" && !IS_CLOUD) {
-				throw new TRPCError({
-					code: "FORBIDDEN",
-					message: "Only the organization owner can create an organization",
-				});
-			}
-
 			if (IS_CLOUD) {
 				await assertOrganizationLimit(ctx.user.id);
 			}
 
-			const result = await db
-				.insert(organization)
-				.values({
-					...input,
-					slug: nanoid(),
-					createdAt: new Date(),
-					ownerId: ctx.user.id,
-				})
-				.returning()
-				.then((res) => res[0]);
+			const insertOrganization = async (
+				executor: Pick<typeof db, "insert" | "query">,
+			) => {
+				const created = await executor
+					.insert(organization)
+					.values({
+						...input,
+						slug: nanoid(),
+						createdAt: new Date(),
+						ownerId: ctx.user.id,
+					})
+					.returning()
+					.then((res) => res[0]);
 
-			if (!result) {
-				throw new TRPCError({
-					code: "INTERNAL_SERVER_ERROR",
-					message: "Failed to create organization",
+				if (!created) {
+					throw new TRPCError({
+						code: "INTERNAL_SERVER_ERROR",
+						message: "Failed to create organization",
+					});
+				}
+
+				// Check if this is the user's first organization
+				const existingMemberships = await executor.query.member.findMany({
+					where: eq(member.userId, ctx.user.id),
 				});
-			}
 
-			// Check if this is the user's first organization
-			const existingMemberships = await db.query.member.findMany({
-				where: eq(member.userId, ctx.user.id),
-			});
+				await executor.insert(member).values({
+					organizationId: created.id,
+					role: "owner",
+					createdAt: new Date(),
+					userId: ctx.user.id,
+				});
+				return created;
+			};
 
-			await db.insert(member).values({
-				organizationId: result.id,
-				role: "owner",
-				createdAt: new Date(),
-				userId: ctx.user.id,
-			});
+			// Shares the instance owner lock so a transfer can't miss this organization.
+			const result = IS_CLOUD
+				? await insertOrganization(db)
+				: await withInstanceOwnerLock(
+						"share",
+						async ({ tx, instanceOwnerId }) => {
+							if (instanceOwnerId !== ctx.user.id) {
+								throw new TRPCError({
+									code: "FORBIDDEN",
+									message: "Only the instance owner can create an organization",
+								});
+							}
+							return insertOrganization(tx);
+						},
+					);
+
 			await audit(ctx, {
 				action: "create",
 				resourceType: "organization",
@@ -227,7 +249,44 @@ export const organizationRouter = createTRPCRouter({
 			});
 			return result[0];
 		}),
+	updateSensitiveActionVerification: protectedProcedure
+		.use(requireSensitiveVerification)
+		.input(z.object({ enabled: z.boolean() }))
+		.mutation(async ({ ctx, input }) => {
+			const organizationId = ctx.session.activeOrganizationId;
+			const userMember = await db.query.member.findFirst({
+				where: and(
+					eq(member.organizationId, organizationId),
+					eq(member.userId, ctx.user.id),
+				),
+				with: { organization: { columns: { ownerId: true } } },
+			});
+
+			if (
+				!userMember ||
+				(userMember.role !== "owner" &&
+					userMember.organization.ownerId !== ctx.user.id)
+			) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only the organization owner can change this setting",
+				});
+			}
+
+			await db
+				.update(organization)
+				.set({ requireSensitiveActionVerification: input.enabled })
+				.where(eq(organization.id, organizationId));
+
+			await audit(ctx, {
+				action: "update",
+				resourceType: "organization",
+				resourceName: "sensitive-action-verification",
+			});
+			return true;
+		}),
 	delete: protectedProcedure
+		.use(requireSensitiveVerification)
 		.input(
 			z.object({
 				organizationId: z.string(),
@@ -285,9 +344,7 @@ export const organizationRouter = createTRPCRouter({
 				});
 			}
 
-			const result = await db
-				.delete(organization)
-				.where(eq(organization.id, input.organizationId));
+			const result = await deleteOrganization(input.organizationId);
 
 			await audit(ctx, {
 				action: "delete",
@@ -298,6 +355,7 @@ export const organizationRouter = createTRPCRouter({
 			return result;
 		}),
 	inviteMember: withPermission("member", "create")
+		.use(requireSensitiveVerification)
 		.input(
 			z.object({
 				email: z.string().email(),
@@ -354,6 +412,17 @@ export const organizationRouter = createTRPCRouter({
 				throw new TRPCError({
 					code: "FORBIDDEN",
 					message: "Cannot invite a user with the owner role",
+				});
+			}
+
+			if (
+				input.role === "admin" &&
+				ctx.user.role !== "owner" &&
+				ctx.user.role !== "admin"
+			) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only owners and admins can invite a user as admin",
 				});
 			}
 
@@ -422,6 +491,7 @@ export const organizationRouter = createTRPCRouter({
 		});
 	}),
 	removeInvitation: withPermission("member", "create")
+		.use(requireSensitiveVerification)
 		.input(z.object({ invitationId: z.string() }))
 		.mutation(async ({ ctx, input }) => {
 			const invitationResult = await db.query.invitation.findFirst({
@@ -457,6 +527,7 @@ export const organizationRouter = createTRPCRouter({
 			return result;
 		}),
 	updateMemberRole: withPermission("member", "update")
+		.use(requireSensitiveVerification)
 		.input(
 			z.object({
 				memberId: z.string(),
@@ -504,6 +575,18 @@ export const organizationRouter = createTRPCRouter({
 					code: "FORBIDDEN",
 					message:
 						"Only the organization owner can change admin roles. Admins can only modify member roles.",
+				});
+			}
+
+			const callerIsPrivileged =
+				ctx.user.role === "owner" || ctx.user.role === "admin";
+			if (
+				!callerIsPrivileged &&
+				(input.role === "admin" || target.role === "admin")
+			) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "Only owners and admins can assign or change the admin role",
 				});
 			}
 

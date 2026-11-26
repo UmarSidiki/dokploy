@@ -7,10 +7,12 @@ import {
 	adminProcedure,
 	createTRPCRouter,
 	protectedProcedure,
+	requireSensitiveVerification,
 } from "@/server/api/trpc";
 
 export const licenseKeyRouter = createTRPCRouter({
 	activate: adminProcedure
+		.use(requireSensitiveVerification)
 		.input(z.object({ licenseKey: z.string().min(1) }))
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -100,6 +102,7 @@ export const licenseKeyRouter = createTRPCRouter({
 		return true;
 	}),
 	updateEnterpriseSettings: adminProcedure
+		.use(requireSensitiveVerification)
 		.input(
 			z.object({
 				enableEnterpriseFeatures: z.boolean().optional(),

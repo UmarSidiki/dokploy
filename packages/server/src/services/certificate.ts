@@ -14,6 +14,10 @@ import { stringify } from "yaml";
 import type { z } from "zod";
 import { encodeBase64 } from "../utils/docker/utils";
 import { execAsyncRemote } from "../utils/process/execAsync";
+import {
+	getRemoteTraefikReloadCommand,
+	reloadTraefikDynamicConfig,
+} from "../utils/traefik/reload";
 
 export type Certificate = typeof certificates.$inferSelect;
 
@@ -53,20 +57,38 @@ export const createCertificate = async (
 
 	const cer = certificate[0];
 
-	createCertificateFiles(cer);
+	await createCertificateFiles(cer);
 
 	return cer;
 };
 
+// certificatePath feeds rm -rf and mkdir -p; a tampered row must not escape the certificates dir
+const resolveCertificateDir = (certificate: Certificate) => {
+	const { CERTIFICATES_PATH } = paths(!!certificate.serverId);
+	const base = path.resolve(CERTIFICATES_PATH);
+	const certDir = path.resolve(base, certificate.certificatePath);
+	if (!certDir.startsWith(`${base}${path.sep}`)) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Invalid certificate path",
+		});
+	}
+	return certDir;
+};
+
 export const removeCertificateById = async (certificateId: string) => {
 	const certificate = await findCertificateById(certificateId);
-	const { CERTIFICATES_PATH } = paths(!!certificate.serverId);
-	const certDir = path.join(CERTIFICATES_PATH, certificate.certificatePath);
+	const certDir = resolveCertificateDir(certificate);
 
 	if (certificate.serverId) {
-		await execAsyncRemote(certificate.serverId, `rm -rf ${quote([certDir])}`);
+		const { DYNAMIC_TRAEFIK_PATH } = paths(true);
+		await execAsyncRemote(
+			certificate.serverId,
+			`rm -rf ${quote([certDir])} && ${getRemoteTraefikReloadCommand(DYNAMIC_TRAEFIK_PATH)}`,
+		);
 	} else {
 		await removeDirectoryIfExistsContent(certDir);
+		reloadTraefikDynamicConfig();
 	}
 
 	const result = await db
@@ -85,8 +107,7 @@ export const removeCertificateById = async (certificateId: string) => {
 };
 
 const createCertificateFiles = async (certificate: Certificate) => {
-	const { CERTIFICATES_PATH } = paths(!!certificate.serverId);
-	const certDir = path.join(CERTIFICATES_PATH, certificate.certificatePath);
+	const certDir = resolveCertificateDir(certificate);
 	const crtPath = path.join(certDir, "chain.crt");
 	const keyPath = path.join(certDir, "privkey.key");
 
@@ -108,12 +129,14 @@ const createCertificateFiles = async (certificate: Certificate) => {
 	if (certificate.serverId) {
 		const certificateData = encodeBase64(certificate.certificateData);
 		const privateKey = encodeBase64(certificate.privateKey);
-		const command = `
-			mkdir -p ${quote([certDir])};
-			echo "${certificateData}" | base64 -d > ${quote([crtPath])};
-			echo "${privateKey}" | base64 -d > ${quote([keyPath])};
-			echo "${yamlConfig}" > ${quote([configFile])};
-		`;
+		const { DYNAMIC_TRAEFIK_PATH } = paths(true);
+		const command = [
+			`mkdir -p ${quote([certDir])}`,
+			`echo "${certificateData}" | base64 -d > ${quote([crtPath])}`,
+			`echo "${privateKey}" | base64 -d > ${quote([keyPath])}`,
+			`echo "${yamlConfig}" > ${quote([configFile])}`,
+			getRemoteTraefikReloadCommand(DYNAMIC_TRAEFIK_PATH),
+		].join(" && ");
 
 		await execAsyncRemote(certificate.serverId, command);
 	} else {
@@ -125,6 +148,8 @@ const createCertificateFiles = async (certificate: Certificate) => {
 		fs.writeFileSync(keyPath, certificate.privateKey);
 
 		fs.writeFileSync(configFile, yamlConfig);
+
+		reloadTraefikDynamicConfig();
 	}
 };
 

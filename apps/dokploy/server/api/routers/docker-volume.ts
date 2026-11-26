@@ -1,4 +1,5 @@
 import {
+	assertServerAccess,
 	deleteVolumeFile,
 	findServerById,
 	getVolumeConfig,
@@ -12,7 +13,11 @@ import {
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { audit } from "@/server/api/utils/audit";
-import { createTRPCRouter, withPermission } from "../trpc";
+import {
+	createTRPCRouter,
+	requireSensitiveVerification,
+	withPermission,
+} from "../trpc";
 
 export const volumeNameRegex = /^[a-zA-Z0-9.\-_]+$/;
 
@@ -33,6 +38,7 @@ export const dockerVolumeRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const server = await findServerById(input.serverId);
 				if (server.organizationId !== ctx.session?.activeOrganizationId) {
@@ -49,6 +55,7 @@ export const dockerVolumeRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const server = await findServerById(input.serverId);
 				if (server.organizationId !== ctx.session?.activeOrganizationId) {
@@ -70,6 +77,7 @@ export const dockerVolumeRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const server = await findServerById(input.serverId);
 				if (server.organizationId !== ctx.session?.activeOrganizationId) {
@@ -95,6 +103,7 @@ export const dockerVolumeRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const server = await findServerById(input.serverId);
 				if (server.organizationId !== ctx.session?.activeOrganizationId) {
@@ -117,6 +126,7 @@ export const dockerVolumeRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const server = await findServerById(input.serverId);
 				if (server.organizationId !== ctx.session?.activeOrganizationId) {
@@ -138,6 +148,7 @@ export const dockerVolumeRouter = createTRPCRouter({
 		}),
 
 	deleteVolumeFile: withPermission("docker", "read")
+		.use(requireSensitiveVerification)
 		.input(
 			z.object({
 				volumeName: z
@@ -152,6 +163,7 @@ export const dockerVolumeRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const server = await findServerById(input.serverId);
 				if (server.organizationId !== ctx.session?.activeOrganizationId) {
@@ -178,6 +190,7 @@ export const dockerVolumeRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const server = await findServerById(input.serverId);
 				if (server.organizationId !== ctx.session?.activeOrganizationId) {
@@ -188,6 +201,7 @@ export const dockerVolumeRouter = createTRPCRouter({
 		}),
 
 	removeVolume: withPermission("docker", "read")
+		.use(requireSensitiveVerification)
 		.input(
 			z.object({
 				volumeName: z
@@ -198,6 +212,7 @@ export const dockerVolumeRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			if (input.serverId) {
 				const server = await findServerById(input.serverId);
 				if (server.organizationId !== ctx.session?.activeOrganizationId) {
