@@ -153,8 +153,9 @@ describe("settings.updateServer", () => {
 		process.env.DOKPLOY_IMAGE = "ghcr.io/umarsidiki/dokploy-custom";
 		mockGetDockerResourceType.mockResolvedValue("service");
 		mockGetUpdateData.mockResolvedValue({
-			latestVersion: "latest",
+			latestVersion: "v9.9.9-fork.4",
 			updateAvailable: true,
+			imageTag: "latest",
 		});
 		mockSpawnAsync.mockResolvedValue({ stdout: "", stderr: null });
 

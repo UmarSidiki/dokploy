@@ -655,7 +655,7 @@ export const settingsRouter = createTRPCRouter({
 				"update",
 				"--force",
 				"--image",
-				getDokployImage(data.latestVersion ?? undefined),
+				getDokployImage(data.imageTag ?? data.latestVersion ?? undefined),
 				"dokploy",
 			]);
 			await audit(ctx, {

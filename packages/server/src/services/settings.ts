@@ -20,6 +20,8 @@ import {
 export interface IUpdateData {
 	latestVersion: string | null;
 	updateAvailable: boolean;
+	/** Docker tag to pull when it differs from `latestVersion` (custom images). */
+	imageTag?: string;
 }
 
 export const DEFAULT_UPDATE_DATA: IUpdateData = {
@@ -69,14 +71,30 @@ const parseImageRepository = (image: string) => {
 	return { host, repository: rest.join("/") };
 };
 
+const MANIFEST_ACCEPT = [
+	"application/vnd.oci.image.index.v1+json",
+	"application/vnd.docker.distribution.manifest.list.v2+json",
+	"application/vnd.oci.image.manifest.v1+json",
+	"application/vnd.docker.distribution.manifest.v2+json",
+].join(", ");
+
+interface GhcrImageInfo {
+	digest: string;
+	version: string | null;
+}
+
 /**
- * Returns the manifest digest published for `tag` in GHCR.
+ * Returns the manifest digest published for `tag` in GHCR, plus the version the
+ * CI build stamped into the `org.opencontainers.image.version` label.
  *
- * Image digests are content-addressed, so comparing this against the running
- * service digest tells us whether a newer build of a custom image exists.
- * Returns null when the registry is unsupported or the tag is missing.
+ * Image digests are content-addressed, so comparing the digest against the
+ * running service digest tells us whether a newer build of a custom image
+ * exists. Returns null when the registry is unsupported or the tag is missing.
  */
-const getGhcrDigest = async (image: string, tag: string) => {
+const getGhcrImageInfo = async (
+	image: string,
+	tag: string,
+): Promise<GhcrImageInfo | null> => {
 	const parsed = parseImageRepository(image);
 	if (!parsed || parsed.host !== "ghcr.io") {
 		return null;
@@ -94,27 +112,56 @@ const getGhcrDigest = async (image: string, tag: string) => {
 		return null;
 	}
 
-	const manifestResponse = await fetch(
-		`https://ghcr.io/v2/${repository}/manifests/${tag}`,
-		{
-			method: "HEAD",
-			headers: {
-				Authorization: `Bearer ${token}`,
-				Accept: [
-					"application/vnd.oci.image.index.v1+json",
-					"application/vnd.docker.distribution.manifest.list.v2+json",
-					"application/vnd.oci.image.manifest.v1+json",
-					"application/vnd.docker.distribution.manifest.v2+json",
-				].join(", "),
-			},
-		},
-	);
+	const headers = { Authorization: `Bearer ${token}`, Accept: MANIFEST_ACCEPT };
+	const manifestUrl = (reference: string) =>
+		`https://ghcr.io/v2/${repository}/manifests/${reference}`;
 
-	if (!manifestResponse.ok) {
+	const headResponse = await fetch(manifestUrl(tag), {
+		method: "HEAD",
+		headers,
+	});
+	if (!headResponse.ok) {
+		return null;
+	}
+	const digest = headResponse.headers.get("docker-content-digest");
+	if (!digest) {
 		return null;
 	}
 
-	return manifestResponse.headers.get("docker-content-digest");
+	// The version label is cosmetic, so any failure here must not hide the update.
+	let version: string | null = null;
+	try {
+		const index = (await (
+			await fetch(manifestUrl(tag), { headers })
+		).json()) as {
+			manifests?: {
+				digest: string;
+				platform?: { architecture?: string };
+			}[];
+		};
+		const imageManifest = index.manifests?.find(
+			(m) => m.platform?.architecture && m.platform.architecture !== "unknown",
+		);
+		if (imageManifest) {
+			const manifest = (await (
+				await fetch(manifestUrl(imageManifest.digest), { headers })
+			).json()) as { config?: { digest?: string } };
+			if (manifest.config?.digest) {
+				const config = (await (
+					await fetch(
+						`https://ghcr.io/v2/${repository}/blobs/${manifest.config.digest}`,
+						{ headers: { Authorization: `Bearer ${token}` } },
+					)
+				).json()) as { config?: { Labels?: Record<string, string> } };
+				version =
+					config.config?.Labels?.["org.opencontainers.image.version"] ?? null;
+			}
+		}
+	} catch {
+		version = null;
+	}
+
+	return { digest, version };
 };
 
 /** Returns latest version number and information whether server update is available by comparing current image's digest against digest for provided image tag via Docker hub API. */
@@ -128,16 +175,17 @@ export const getUpdateData = async (
 		// only meaningful signal is whether the registry digest moved.
 		if (process.env.DOKPLOY_IMAGE) {
 			const currentDigest = await getServiceImageDigest();
-			const remoteDigest = await getGhcrDigest(
+			const remote = await getGhcrImageInfo(
 				process.env.DOKPLOY_IMAGE,
 				currentImageTag,
 			);
-			if (!remoteDigest) {
+			if (!remote) {
 				return DEFAULT_UPDATE_DATA;
 			}
 			return {
-				latestVersion: currentImageTag,
-				updateAvailable: currentDigest !== remoteDigest,
+				latestVersion: remote.version ?? currentImageTag,
+				updateAvailable: currentDigest !== remote.digest,
+				imageTag: currentImageTag,
 			};
 		}
 

@@ -12,8 +12,27 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: build-dokploy-image
+  cancel-in-progress: false
+
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute fork version
+        id: v
+        run: |
+          BASE=$(node -p "require('./apps/dokploy/package.json').version")
+          echo "version=${BASE}-fork.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
   docker-amd64:
+    needs: version
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -34,6 +53,12 @@ jobs:
           cp apps/dokploy/.env.production.example .env.production
           cp apps/dokploy/.env.production.example apps/dokploy/.env.production
 
+      - name: Stamp fork version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          node -e "const f='apps/dokploy/package.json',p=require('./'+f);p.version=process.env.VERSION;require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
@@ -41,11 +66,13 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64
           push: true
+          labels: org.opencontainers.image.version=${{ needs.version.outputs.version }}
           tags: |
             ${{ env.IMAGE_NAME }}:latest-amd64
             ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}-amd64
 
   docker-arm64:
+    needs: version
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout
@@ -66,6 +93,12 @@ jobs:
           cp apps/dokploy/.env.production.example .env.production
           cp apps/dokploy/.env.production.example apps/dokploy/.env.production
 
+      - name: Stamp fork version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          node -e "const f='apps/dokploy/package.json',p=require('./'+f);p.version=process.env.VERSION;require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
@@ -73,12 +106,13 @@ jobs:
           file: ./Dockerfile
           platforms: linux/arm64
           push: true
+          labels: org.opencontainers.image.version=${{ needs.version.outputs.version }}
           tags: |
             ${{ env.IMAGE_NAME }}:latest-arm64
             ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}-arm64
 
   combine-manifests:
-    needs: [docker-amd64, docker-arm64]
+    needs: [version, docker-amd64, docker-arm64]
     runs-on: ubuntu-latest
     steps:
       - name: Set up Docker Buildx
@@ -92,8 +126,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create and push manifests
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           docker buildx imagetools create -t ${IMAGE_NAME}:latest \
+            ${IMAGE_NAME}:latest-amd64 \
+            ${IMAGE_NAME}:latest-arm64
+
+          docker buildx imagetools create -t ${IMAGE_NAME}:${VERSION} \
             ${IMAGE_NAME}:latest-amd64 \
             ${IMAGE_NAME}:latest-arm64
 
